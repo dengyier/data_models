@@ -751,11 +751,151 @@ def main():
             for i, bomb in enumerate(params['bombs']):
                 print(f"  第{i+1}枚弹: 投放{bomb['drop_time']:.1f}s, 延迟{bomb['explosion_delay']:.1f}s")
     
+    # 保存结果到Excel
+    save_results_to_excel(best_params, best_time)
+    
     return {
         'params_dict': best_params,
         'total_shielding_time': best_time,
         'constraints_satisfied': constraints_ok
     }
+
+def save_results_to_excel(params_dict, total_shielding_time, filename='result3.xlsx'):
+    """按照模板格式保存结果到Excel文件"""
+    print(f"\\n【保存结果到{filename}】")
+    
+    # 按照模板格式创建数据
+    data = []
+    
+    # 预定义的行顺序（按照模板）
+    template_rows = [
+        ('FY1', 1), ('FY1', 2), ('FY1', 3),
+        ('FY2', 1), ('FY2', 2), ('FY2', 3),
+        ('FY3', 1), ('FY3', 2), ('FY3', 3),
+        ('FY4', 1), ('FY4', 2), ('FY4', 3),
+        ('FY5', 1), ('FY5', 2), ('FY5', 3)
+    ]
+    
+    # 创建详细结果的查找字典
+    bomb_lookup = {}
+    bomb_counter = 1
+    
+    solver = Problem5CorrectedSolver()
+    
+    for drone_name in ['FY1', 'FY2', 'FY3', 'FY4', 'FY5']:
+        if drone_name in params_dict and params_dict[drone_name]['bombs']:
+            drone_params = params_dict[drone_name]
+            for bomb_idx, bomb_params in enumerate(drone_params['bombs']):
+                bomb_lookup[(drone_name, bomb_idx + 1)] = {
+                    'speed': drone_params['speed'],
+                    'direction_angle': drone_params['direction'],
+                    'drop_time': bomb_params['drop_time'],
+                    'explosion_delay': bomb_params['explosion_delay'],
+                    'bomb_number': bomb_counter
+                }
+                bomb_counter += 1
+    
+    # 按模板顺序填充数据
+    for drone_name, bomb_seq in template_rows:
+        if (drone_name, bomb_seq) in bomb_lookup:
+            bomb_info = bomb_lookup[(drone_name, bomb_seq)]
+            
+            # 计算位置信息
+            t_ni = bomb_info['drop_time']
+            delta_t_ni = bomb_info['explosion_delay']
+            
+            drop_pos = solver.drone_position(
+                t_ni, drone_name, 
+                bomb_info['speed'], bomb_info['direction_angle']
+            )
+            explosion_pos = solver.smoke_explosion_position(
+                drone_name, t_ni, delta_t_ni,
+                bomb_info['speed'], bomb_info['direction_angle']
+            )
+            
+            # 转换方向角为度数，并处理特殊情况
+            direction_deg = np.degrees(bomb_info['direction_angle'])
+            if direction_deg < 0:
+                direction_deg += 360
+            elif direction_deg >= 360:
+                direction_deg -= 360
+            
+            row = {
+                '无人机编号': drone_name,
+                '无人机运动方向': f"{direction_deg:.0f}",
+                '无人机运动速度[m/s]': f"{bomb_info['speed']:.1f}",
+                '烟幕干扰弹编号': bomb_info['bomb_number'],
+                '烟幕干扰弹投放点x坐标[m]': f"{drop_pos[0]:.1f}",
+                '烟幕干扰弹投放点y坐标[m]': f"{drop_pos[1]:.1f}",
+                '烟幕干扰弹投放点z坐标[m]': f"{drop_pos[2]:.1f}",
+                '烟幕干扰弹起爆点x坐标[m]': f"{explosion_pos[0]:.1f}",
+                '烟幕干扰弹起爆点y坐标[m]': f"{explosion_pos[1]:.1f}",
+                '烟幕干扰弹起爆点z坐标[m]': f"{explosion_pos[2]:.1f}",
+                '有效遮蔽时长[s]': f"{total_shielding_time:.2f}",
+                '干扰的导弹编号': get_target_missile(drone_name)
+            }
+        else:
+            # 空行（该无人机没有对应编号的烟幕弹）
+            row = {
+                '无人机编号': drone_name,
+                '无人机运动方向': '',
+                '无人机运动速度[m/s]': '',
+                '烟幕干扰弹编号': bomb_seq,
+                '烟幕干扰弹投放点x坐标[m]': '',
+                '烟幕干扰弹投放点y坐标[m]': '',
+                '烟幕干扰弹投放点z坐标[m]': '',
+                '烟幕干扰弹起爆点x坐标[m]': '',
+                '烟幕干扰弹起爆点y坐标[m]': '',
+                '烟幕干扰弹起爆点z坐标[m]': '',
+                '有效遮蔽时长[s]': '',
+                '干扰的导弹编号': ''
+            }
+        
+        data.append(row)
+    
+    # 创建DataFrame并保存
+    df = pd.DataFrame(data)
+    
+    with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+        df.to_excel(writer, sheet_name='Sheet1', index=False)
+        worksheet = writer.sheets['Sheet1']
+        
+        # 调整列宽
+        column_widths = {
+            'A': 12,  # 无人机编号
+            'B': 15,  # 无人机运动方向
+            'C': 18,  # 无人机运动速度
+            'D': 15,  # 烟幕干扰弹编号
+            'E': 22,  # 投放点x坐标
+            'F': 22,  # 投放点y坐标
+            'G': 22,  # 投放点z坐标
+            'H': 22,  # 起爆点x坐标
+            'I': 22,  # 起爆点y坐标
+            'J': 22,  # 起爆点z坐标
+            'K': 18,  # 有效遮蔽时长
+            'L': 18   # 干扰的导弹编号
+        }
+        
+        for col, width in column_widths.items():
+            worksheet.column_dimensions[col].width = width
+    
+    print(f"结果已保存到 {filename}")
+    print("\\n结果表格预览:")
+    print(df.head(15).to_string(index=False))
+    
+    return df
+
+def get_target_missile(drone_name):
+    """根据无人机名称返回其主要干扰的导弹编号"""
+    # 基于威胁等级和距离的分配策略
+    missile_assignment = {
+        'FY1': 'M3',  # FY1主要干扰M3（最高威胁）
+        'FY2': 'M2',  # FY2主要干扰M2（中等威胁）
+        'FY3': 'M1',  # FY3主要干扰M1（最低威胁）
+        'FY4': 'M2',  # FY4辅助干扰M2
+        'FY5': 'M3'   # FY5辅助干扰M3
+    }
+    return missile_assignment.get(drone_name, '')
 
 if __name__ == "__main__":
     results = main()
